@@ -12,7 +12,6 @@ class Route
     @volume = 0.0
     @customers = {}
   end
-
 end
 
 class Customer
@@ -27,7 +26,6 @@ end
 
 class FileSource
   attr_accessor :newfilename
-
   def initialize
     # local
     sep = File::ALT_SEPARATOR
@@ -88,8 +86,13 @@ class FileSource
 
   def fetch_routes
     route_list = Array.new
-    route_pattern = /25\s+BERLYS ALIMENTACION S\.A\.U\s+[\d:]+\s+[\d.]+\s+
-Volumen de pedidos de la ruta :\s+(?<routeid>\d+)\s+25 (?<routedesc>[^\n]+)\s+Día de entrega :\s+(?<date>[^ ]{10})(?<customers>.+?)NUMERO DE CLIENTES\s+:\s+(?<costnum>\d+).+?SUMA VOLUMEN POR RUTA\s+:\s+(?<volamt>[\d,.]+) (?<um1>(?:PVL|KG)).+?SUMA KG POR RUTA\s+:\s+(?<weightamt>[\d,.]+) (?<um2>(?:PVL|KG)).+?(?:CAPACIDAD TOTAL CAMIÓN\s+:\s+(?<truckcap>[\d,.]+) (?<um3>(?:PVL|KG)))?
+    route_pattern = /25\s+BERLYS ALIMENTACION S\.A\.U\s+[\d:]+\s+[\d.]+\s+\
+Volumen de pedidos de la ruta :\s+(?<routeid>\d+)\s+25 (?<routedesc>[^\n]+)\s+\
+Día de entrega :\s+(?<date>[^ ]{10})(?<customers>.+?)\
+NUMERO DE CLIENTES\s+:\s+(?<costnum>\d+).+?\
+SUMA VOLUMEN POR RUTA\s+:\s+(?<volamt>[\d,.]+) (?<um1>(?:PVL|KG)).+?\
+SUMA KG POR RUTA\s+:\s+(?<weightamt>[\d,.]+) (?<um2>(?:PVL|KG)).+?\
+(?:CAPACIDAD TOTAL CAMIÓN\s+:\s+(?<truckcap>[\d,.]+) (?<um3>(?:PVL|KG)))?
 /m
 
     content = @file.read
@@ -117,15 +120,21 @@ Volumen de pedidos de la ruta :\s+(?<routeid>\d+)\s+25 (?<routedesc>[^\n]+)\s+D�
   end
 end
 
-f = FileSource.new
-route_list = f.fetch_routes
-route_list.each do |route|
-  route_load = 0.0
-  puts "#{route.date}\t#{route.id}\t#{route.name}"
-  route.customers.keys.collect!.with_index do |key, idx|
-    customer = route.customers[key]
-    puts "#{idx+1}\t#{customer.name}\t#{customer.address}\t#{customer.load}"
-    route_load += customer.load
+def main
+  line_number = 0
+  f = FileSource.new
+  route_list = f.fetch_routes
+  route_list.each do |route|
+    route_load = 0.0
+    puts "#{route.date}\t#{route.id}\t#{route.name}"
+    route.customers.keys.collect!.with_index do |key, idx|
+      customer = route.customers[key]
+      line_number += 1
+      puts "#{line_number}\t#{customer.name}\t#{customer.address}\t#{customer.load}"
+      route_load += customer.load
+    end
+    puts "\t\t\t#{route.volume}"
   end
-  puts "\t\t\t#{route.volume}"
 end
+
+main
