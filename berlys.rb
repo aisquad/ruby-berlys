@@ -176,14 +176,14 @@ if $options[:getmail] then
   get_mail.run
 end
 
+source = FileSource.new
 if $options[:all] then
-  source = FileSource.new
   source.show_counter = false
   source.main
 elsif $options[:dayly] then
-  source = FileSource.new
   source.show_counter = true
   source.main
 elsif $options[:routes] then
-  puts options[:routes]
+  source.show_counter = true
+  source.main
 end
