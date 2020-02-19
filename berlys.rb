@@ -5,12 +5,13 @@ require 'optparse'
 
 require './config'
 require './getmail'
+require './utils'
 
 # Llegim de la carpeta de descàrregues
 # Si no hi ha el fitxer "Volumen Rutas.txt" aleshores el llegim dels fitxers
 # a la carpeta de recursos ../../data/berlys/<ANY ACTUAL>/<MES ACTUAL> i triem el més recent.
-# si passem l'opció de descarregar el fitxer (-g), llavors obrim el correu i el descarreguem
-# a la carpeta de recursos ../../data/berlys/attachments, ens quedem amb el contingut
+# Si passem l'opció de descarregar el fitxer (-g), llavors obrim el correu i el descarreguem
+# a la carpeta de recursos ../../data/berlys/attachments, ens quedem amb el contingut,
 # n'agafem les dades i alcem còpia a l'altra carpeta de recursos ../data/berlys/<ANY ACTUAL>/<MES ACTUAL>
 
 
@@ -24,6 +25,10 @@ class Route
     @volume = 0.0
     @customers = {}
   end
+
+  def to_s
+    "#<Route: id=#{@id} name='#{@name}' date='#{@date}' weight=#{@weight} volume=#{@volume} costumers=#{@customers.length}>"
+  end
 end
 
 class Customer
@@ -35,49 +40,36 @@ class Customer
     @address = ''
     @load = 0.0
   end
+
+  def to_s
+    "#<Customer: id=#{@id} name='#{@name}', ordnum=#{@ord_num}, town='#{@address}' load=#{@load}>"
+  end
 end
 
 class FileSource
   attr_accessor :new_filename
-  attr_writer :show_counter, :assigned_routes
+  attr_writer :global_counter, :assigned_routes, :filter
 
   def initialize
-    # local
-    sep = File::ALT_SEPARATOR
-    now = Time.now
-    day = Date.today
-
-    # Attributes
     @config = Config.new.config
-    @show_counter = true
-    @assigned_routes = %w[680]
-    @rootpath = %w[.. .. data berlys].join sep
-    @sourcepath = %w[.. .. .. Downloads].join sep
-    @old_filename = @config[:default_filenames][0]
-    @allowed_routes = %w[678 679 680 681 682 686 688 696]
-    abssourcefilename = [@sourcepath, @old_filename].join sep
+    @global_counter = true
+    @allowed_routes = [678, 679, 680, 681, 682, 686, 688, 696]
+    @content = ''
+    @new_filename = ''
+    @old_filename = ''
+    @att_filename = ''
+    @filter = ''
+  end
 
-    day += 1 if now.hour >= 19 || now.hour < 3
-
-    destfilename = [
-      now.strftime('%Y'),
-      now.strftime('%m'),
-      day.strftime('%Y-%m-%d.txt')
-    ].join sep
-    @new_filename = [@rootpath, destfilename].join sep
-    if File.exist?(abssourcefilename)
-      @file = File.open(abssourcefilename, 'r')
-    elsif File.exist?(@new_filename)
-      @file = File.open(@new_filename, 'r')
-    else
-      files = Dir.entries([@rootpath, now.strftime('%Y'), now.strftime('%m')].join(sep))
-      @file = File.open(
-        [
-          @rootpath, now.strftime('%Y'), now.strftime('%m'), files[-1]
-        ].join(sep),
-        'r'
-      )
-    end
+  def read_data
+    # Ací decidim d'on llegir el fitxer de text que conté les dades.
+    filename = FilenameHandler.new
+    @old_filename = filename.from_download_dir
+    @new_filename = filename.to_data_dir
+    @att_filename = filename.get_last_downloaded_file
+    puts ("#{@old_filename} #{File.exist?(@old_filename)}")
+    @file = File.open(File.exist?(@old_filename) ? @old_filename : @att_filename, 'r')
+    @file.read
   end
 
   def fetch_customers(customers)
@@ -103,20 +95,20 @@ class FileSource
   end
 
   def fetch_routes
-    route_list = Array.new
+    route_hash = Hash.new
     route_pattern = /25\s+BERLYS ALIMENTACION S\.A\.U\s+[\d:]+\s+[\d.]+\s+\
 Volumen de pedidos de la ruta :\s+(?<routeID>\d+)\s+25 (?<routeName>[^\n]+)\s+\
 Día de entrega :\s+(?<unloadDate>[^ ]{10})(?<customers>.+?)\
 NUMERO DE CLIENTES\s+:\s+(?<costNum>\d+).+?\
 SUMA VOLUMEN POR RUTA\s+:\s+(?<volAmt>[\d,.]+) (?<um1>(?:PVL|KG)).+?\
 SUMA KG POR RUTA\s+:\s+(?<weightAmt>[\d,.]+) (?<um2>(?:PVL|KG)).+?\
-(?:CAPACIDAD TOTAL CAMIÓN\s+:\s+(?<truckCap>[\d,.]+) (?<um3>(?:PVL|KG)))?
+(?:CAPACIDAD TOTAL CAMIÓN\s+:\s+(?<truckCap>[\d,.]+) (?<um3>(?:PVL|KG)))?\
 /m
 
-    content = @file.read
-    matches = content.scan route_pattern
+    @content = read_data
+    matches = @content.scan route_pattern
     matches.each do |match|
-      next unless @allowed_routes.include? match[0]
+      next unless @allowed_routes.include? match[0].to_i
 
       route = Route.new
       route.id = match[0].to_i
@@ -125,51 +117,53 @@ SUMA KG POR RUTA\s+:\s+(?<weightAmt>[\d,.]+) (?<um2>(?:PVL|KG)).+?\
       route.volume = match[5]
       route.weight = match[7]
       route.customers = fetch_customers(match[3])
-      route_list.append(route)
+      route_hash[route.id] = route
     end
     puts @file.path
-    route_list
+    route_hash
   end
 
-  def read
-    @file.readlines.each do |line|
-      puts line
-    end
-  end
-
-  def main
+  def dispatch(set=@allowed_routes)
     line_number = 0
     f = FileSource.new
-    route_list = f.fetch_routes
-    wd = Date.today.strftime("%a")
-    route_list.each do |route|
-      if $options[:routes] && $options[:routes].is_a?(Array) then next unless $options[:routes].include? route.id.to_s end
-      if $options[:dayly] then next unless @config[:week_days][wd].include? route.id end
+    route_hash = f.fetch_routes
+    set.each do |routeid|
+      next unless route_hash.has_key? routeid
+      route = route_hash[routeid]
       route_load = 0.0
       puts "#{route.date}\t#{route.id}\t#{route.name}"
       route.customers.keys.collect!.with_index do |key, idx|
         customer = route.customers[key]
         line_number += 1
-        puts "#{@show_counter ? line_number : idx + 1}\t#{customer.name}\t#{customer.address}\t#{customer.load}"
+        puts "#{@global_counter ? line_number : idx + 1}\t#{customer.name}\t#{customer.address}\t#{format_number customer.load}"
         route_load += customer.load
       end
-      puts "\t\t\t#{route.volume}"
+      puts "\t\t\t#{route.volume}\t#{format_number route_load}"
+    end
+  end
+
+  def daily
+    weekday = Date.today.strftime("%a")
+    if @config[:week_days].has_key?(weekday)
+      dispatch(@config[:week_days][weekday])
+    else
+      raise KeyError("Today you must take a pause!")
     end
   end
 end
 
-$options = {}
+options = {}
 OptionParser.new do |opt|
-  opt.on('-a', '--all') { |o| $options[:all] = o }
-  opt.on('-d', '--dayly') { |o| $options[:dayly] = o }
-  opt.on('-g', '--getmail') { |o| $options[:getmail] = o }
+  opt.on('-a', '--all') { |o| options[:all] = o }
+  opt.on('-d', '--daily') { |o| options[:daily] = o }
+  opt.on('-g', '--getmail') { |o| options[:getmail] = o }
   opt.on('-r', '--routes', Array, 'string of ints') do |o|
-    $options[:routes] ||= [*o]
-    end
+    options[:routes] ||= [*o]
+  end
 end.parse!
-$options[:routes] |= ARGV
+options[:routes] |= ARGV
 
-if $options[:getmail] then
+if options[:getmail]
   get_mail = GetMail.new
   get_mail.days_ago = 1
   get_mail.save_downloads = true
@@ -177,13 +171,18 @@ if $options[:getmail] then
 end
 
 source = FileSource.new
-if $options[:all] then
-  source.show_counter = false
-  source.main
-elsif $options[:dayly] then
-  source.show_counter = true
-  source.main
-elsif $options[:routes] then
-  source.show_counter = true
-  source.main
+if options[:all]
+  source.global_counter = false
+  source.filter = 'all'
+  source.dispatch
+elsif options[:daily] then
+  source.global_counter = true
+  source.filter = 'daily'
+  source.daily
+elsif options[:routes] then
+  routes = []
+  source.global_counter = true
+  source.filter = 'routes'
+  options[:routes].each { |r| routes.append(r.to_i) }
+  source.dispatch(routes)
 end
