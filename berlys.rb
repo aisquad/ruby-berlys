@@ -47,29 +47,27 @@ class Customer
 end
 
 class FileSource
-  attr_accessor :new_filename
-  attr_writer :global_counter, :assigned_routes, :filter
+  attr_writer :global_counter, :content
 
   def initialize
     @config = Config.new.config
     @global_counter = true
     @allowed_routes = [678, 679, 680, 681, 682, 686, 688, 696]
     @content = ''
-    @new_filename = ''
-    @old_filename = ''
-    @att_filename = ''
-    @filter = ''
   end
 
-  def read_data
-    # Ací decidim d'on llegir el fitxer de text que conté les dades.
+  def get_data_file_and_read
     filename = FilenameHandler.new
-    @old_filename = filename.from_download_dir
-    @new_filename = filename.to_data_dir
-    @att_filename = filename.get_last_downloaded_file
-    puts ("#{@old_filename} #{File.exist?(@old_filename)}")
-    @file = File.open(File.exist?(@old_filename) ? @old_filename : @att_filename, 'r')
-    @file.read
+    old_filename = filename.from_download_dir
+    last_dld_filename = filename.get_last_downloaded_file
+    @file = File.open(File.exist?(old_filename) ? old_filename : last_dld_filename, 'r')
+    @content = @file.read
+    if File.exist?(old_filename)
+      new_filename = set_new_filename(@content)
+      @file.close
+      File.rename(old_filename, new_filename)
+      @file = File.open(new_filename, 'r')
+    end
   end
 
   def fetch_customers(customers)
@@ -105,7 +103,7 @@ SUMA KG POR RUTA\s+:\s+(?<weightAmt>[\d,.]+) (?<um2>(?:PVL|KG)).+?\
 (?:CAPACIDAD TOTAL CAMIÓN\s+:\s+(?<truckCap>[\d,.]+) (?<um3>(?:PVL|KG)))?\
 /m
 
-    @content = read_data
+    if @content.empty? then get_data_file_and_read; end
     matches = @content.scan route_pattern
     matches.each do |match|
       next unless @allowed_routes.include? match[0].to_i
@@ -120,6 +118,7 @@ SUMA KG POR RUTA\s+:\s+(?<weightAmt>[\d,.]+) (?<um2>(?:PVL|KG)).+?\
       route_hash[route.id] = route
     end
     puts @file.path
+    @file.close
     route_hash
   end
 
@@ -127,6 +126,7 @@ SUMA KG POR RUTA\s+:\s+(?<weightAmt>[\d,.]+) (?<um2>(?:PVL|KG)).+?\
     line_number = 0
     f = FileSource.new
     route_hash = f.fetch_routes
+    routes_volume = 0.0
     set.each do |routeid|
       next unless route_hash.has_key? routeid
       route = route_hash[routeid]
@@ -137,9 +137,11 @@ SUMA KG POR RUTA\s+:\s+(?<weightAmt>[\d,.]+) (?<um2>(?:PVL|KG)).+?\
         line_number += 1
         puts "#{@global_counter ? line_number : idx + 1}\t#{customer.name}\t#{customer.address}\t#{format_number customer.load}"
         route_load += customer.load
+        routes_volume += customer.load
       end
-      puts "\t\t\t#{route.volume}\t#{format_number route_load}"
+      puts "\t\troute volume:\t\t#{format_number route_load}"
     end
+    puts "\t\tall routes total:\t#{format_number routes_volume}"
   end
 
   def daily
@@ -163,26 +165,25 @@ OptionParser.new do |opt|
 end.parse!
 options[:routes] |= ARGV
 
-if options[:getmail]
-  get_mail = GetMail.new
-  get_mail.days_ago = 1
-  get_mail.save_downloads = true
-  get_mail.run
-end
 
 source = FileSource.new
+if options[:getmail]
+  get_mail = GetMail.new
+  get_mail.days_ago = 7
+  get_mail.save_downloads = true
+  get_mail.run
+  source.content = get_mail.last_data
+end
+
 if options[:all]
   source.global_counter = false
-  source.filter = 'all'
   source.dispatch
 elsif options[:daily] then
   source.global_counter = true
-  source.filter = 'daily'
   source.daily
 elsif options[:routes] then
   routes = []
   source.global_counter = true
-  source.filter = 'routes'
   options[:routes].each { |r| routes.append(r.to_i) }
   source.dispatch(routes)
 end
